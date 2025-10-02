@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบประเมินพนักงาน - Cross Evaluation @ Accounting</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // Enhanced Persistent Database (บันทึกข้อมูลถาวร + สำรองข้อมูล)
+        const PersistentDB = {
+            data: {},
+            
+            // ตรวจสอบว่า localStorage ใช้งานได้หรือไม่
+            isLocalStorageAvailable: () => {
+                try {
+                    const test = '__localStorage_test__';
+                    localStorage.setItem(test, test);
+                    localStorage.removeItem(test);
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            },
+
+            // โหลดข้อมูลจาก localStorage
+            loadFromStorage: (key) => {
+                if (!PersistentDB.isLocalStorageAvailable()) return [];
+                try {
+                    const stored = localStorage.getItem(key);
+                    return stored ? JSON.parse(stored) : [];
+                } catch (e) {
+                    console.warn('Error loading from localStorage:', e);
+                    return [];
+                }
+            },
+
+            // บันทึกข้อมูลลง localStorage
+            saveToStorage: (key, data) => {
+                if (!PersistentDB.isLocalStorageAvailable()) return false;
+                try {
+                    localStorage.setItem(key, JSON.stringify(data));
+                    return true;
+                } catch (e) {
+                    console.warn('Error saving to localStorage:', e);
+                    return false;
+                }
+            },
+
+            // เริ่มต้นข้อมูล
+            init: (key) => {
+                if (!PersistentDB.data[key]) {
+                    // โหลดข้อมูลจาก localStorage ก่อน
+                    const storedData = PersistentDB.loadFromStorage(key);
+                    PersistentDB.data[key] = storedData;
+                }
+            },
+
+            // บันทึกข้อมูลใหม่
+            save: (key, data) => {
+                PersistentDB.init(key);
+                
+                const newEntry = { 
+                    ...data, 
+                    id: Date.now(), 
+                    timestamp: new Date().toISOString(),
+                    sessionId: 'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9)
+                };
+                
+                PersistentDB.data[key].push(newEntry);
+                
+                // บันทึกลง localStorage
+                const saved = PersistentDB.saveToStorage(key, PersistentDB.data[key]);
+                
+                if (saved) {
+                    console.log('✅ ข้อมูลถูกบันทึกถาวรแล้ว');
+                } else {
+                    console.warn('⚠️ ไม่สามารถบันทึกถาวรได้ ใช้หน่วยความจำชั่วคราว');
+                }
+                
+                return Promise.resolve(newEntry);
+            },
+
+            // ดึงข้อมูลทั้งหมด
+            getAll: (key) => {
+                PersistentDB.init(key);
+                return Promise.resolve([...PersistentDB.data[key]]);
+            },
+
+            // ลบข้อมูลทั้งหมด
+            clear: (key) => {
+                PersistentDB.data[key] = [];
+                PersistentDB.saveToStorage(key, []);
+                console.log('🗑️ ข้อมูลถูกลบทั้งหมดแล้ว');
+            },
+
+            // ส่งออกข้อมูลเป็น JSON
+            exportData: (key) => {
+                PersistentDB.init(key);
+                const data = {
+                    exportDate: new Date().toISOString(),
+                    totalRecords: PersistentDB.data[key].length,
+                    data: PersistentDB.data[key]
+                };
+                return JSON.stringify(data, null, 2);
+            },
+
+            // นำเข้าข้อมูลจาก JSON
+            importData: (key, jsonString) => {
+                try {
+                    const importedData = JSON.parse(jsonString);
+                    if (importedData.data && Array.isArray(importedData.data)) {
+                        PersistentDB.data[key] = importedData.data;
+                        PersistentDB.saveToStorage(key, PersistentDB.data[key]);
+                        return { success: true, count: importedData.data.length };
+                    }
+                    return { success: false, error: 'รูปแบบข้อมูลไม่ถูกต้อง' };
+                } catch (e) {
+                    return { success: false, error: 'ไม่สามารถอ่านไฟล์ JSON ได้' };
+                }
+            },
+
+            // ตรวจสอบสถานะการจัดเก็บ
+            getStorageInfo: () => {
+                const isAvailable = PersistentDB.isLocalStorageAvailable();
+                let usedSpace = 0;
+                
+                if (isAvailable) {
+                    try {
+                        const allKeys = Object.keys(localStorage);
+                        usedSpace = allKeys.reduce((total, key) => {
+                            return total + (localStorage.getItem(key) || '').length;
+                        }, 0);
+                    } catch (e) {
+                        usedSpace = 0;
+                    }
+                }
+                
+                return {
+                    available: isAvailable,
+                    usedSpace: usedSpace,
+                    usedSpaceKB: Math.round(usedSpace / 1024 * 100) / 100
+                };
+            }
+        };
+
+        // Configuration
+        const ACCESS_PASSWORD = 'admin123';
+        const STORAGE_KEY = 'staff-evaluations';
+        const EMPLOYEES = ['Aum', 'Joy', 'Pear', 'Fon'];
+        const SCORES = [
+            { value: 5, label: '5' },
+            { value: 3, label: '3' },
+            { value: 1, label: '1' }
+        ];
+        const MAX_SCORE_PER_CRITERION = 5;
+
+        const ALL_CRITERIA = [
+            { id: '1.1', text: 'สร้างบรรยากาศการทำงานที่เป็นมิตร และเคารพเพื่อนร่วมงานทุกระดับ' },
+            { id: '1.2', text: 'มีน้ำใจ ช่วยเหลือ และให้ความร่วมมือกับเพื่อนร่วมงานและทีมงาน' },
+            { id: '1.3', text: 'ยอมรับความคิดเห็นที่แตกต่าง และเห็นคุณค่าของความหลากหลาย' },
+            { id: '1.4', text: 'สุภาพ อ่อนน้อมถ่อมตน และให้เกียรติผู้อื่น' },
+            { id: '1.5', text: 'จัดการข้อขัดแย้งด้วยเหตุผล และหาทางออกที่สร้างสรรค์' },
+            { id: '2.1', text: 'ปฏิบัติงานด้วยความซื่อสัตย์ โปร่งใส และยึดมั่นในจริยธรรม' },
+            { id: '2.2', text: 'รับผิดชอบต่อผลลัพธ์ของงาน ทั้งความสำเร็จและข้อผิดพลาด' },
+            { id: '2.3', text: 'ตรงต่อเวลา รักษาคำมั่นสัญญา และมีวินัยในการทำงาน' },
+            { id: '2.4', text: 'รักษามาตรฐานความสะอาด ความปลอดภัย และระเบียบในสถานที่ทำงาน' },
+            { id: '3.1', text: 'เข้าใจบทบาท หน้าที่ และกระบวนการทำงานที่ได้รับมอบหมาย' },
+            { id: '3.2', text: 'ใช้ความรู้ ทักษะ และเครื่องมือในการทำงานได้อย่างถูกต้องและเหมาะสม' },
+            { id: '3.3', text: 'ใฝ่รู้ พัฒนาตนเองอย่างต่อเนื่อง และนำสิ่งใหม่ ๆ มาประยุกต์ใช้' },
+            { id: '3.4', text: 'เปิดรับการเรียนรู้จากความผิดพลาด และส่งเสริมการเรียนรู้ของทีม' },
+            { id: '4.1', text: 'วิเคราะห์ปัญหาและตัดสินใจอย่างมีเหตุผลเป็นระบบ' },
+            { id: '4.2', text: 'เสนอแนวทางหรือวิธีการใหม่ ๆ เพื่อพัฒนางานและเพิ่มประสิทธิภาพ' },
+            { id: '4.3', text: 'ทดลองและปรับปรุงวิธีการทำงาน โดยไม่กลัวความล้มเหลว' },
+            { id: '4.4', text: 'มีผลงานหรือแนวคิดที่สร้างคุณค่าเพิ่มให้กับทีม/องค์กรอย่างต่อเนื่อง' },
+            { id: '5.1', text: 'ส่งมอบงานได้ตรงเวลา และมีคุณภาพตามมาตรฐานที่กำหนด' },
+            { id: '5.2', text: 'จัดลำดับความสำคัญของงาน และทำงานได้อย่างมีประสิทธิภาพ' },
+            { id: '5.3', text: 'สื่อสารได้อย่างชัดเจน กระชับ และเหมาะสมกับสถานการณ์' },
+            { id: '5.4', text: 'เป็นผู้ฟังที่ดี และใส่ใจความคิดเห็นของผู้อื่น' },
+            { id: '5.5', text: 'รักษาความเป็นมืออาชีพภายใต้ความกดดัน และปรับตัวได้ดีต่อการเปลี่ยนแปลง' }
+        ];
+
+        const CRITERIA_GROUPS = [
+            {
+                title: '1. ด้านความร่วมมือและมนุษยสัมพันธ์',
+                criteria: ALL_CRITERIA.filter(c => c.id.startsWith('1.'))
+            },
+            {
+                title: '2. ด้านความรับผิดชอบและความซื่อสัตย์',
+                criteria: ALL_CRITERIA.filter(c => c.id.startsWith('2.'))
+            },
+            {
+                title: '3. ด้านความรู้ ความสามารถ และการพัฒนา',
+                criteria: ALL_CRITERIA.filter(c => c.id.startsWith('3.'))
+            },
+            {
+                title: '4. ด้านการคิดเชิงวิเคราะห์และนวัตกรรม',
+                criteria: ALL_CRITERIA.filter(c => c.id.startsWith('4.'))
+            },
+            {
+                title: '5. ด้านผลงานและความเป็นมืออาชีพ',
+                criteria: ALL_CRITERIA.filter(c => c.id.startsWith('5.'))
+            }
+        ];
+
+        const TOTAL_CRITERIA_COUNT = ALL_CRITERIA.length;
+
+        // React-like hooks simulation
+        let currentComponent = null;
+        let stateIndex = 0;
+        let states = [];
+        let effects = [];
+        let effectIndex = 0;
+
+        function useState(initialValue) {
+            const index = stateIndex++;
+            if (states[index] === undefined) {
+                states[index] = initialValue;
+            }
+            
+            const setState = (newValue) => {
+                if (typeof newValue === 'function') {
+                    states[index] = newValue(states[index]);
+                } else {
+                    states[index] = newValue;
+                }
+                if (currentComponent) {
+                    currentComponent.render();
+                }
+            };
+            
+            return [states[index], setState];
+        }
+
+        function useEffect(callback, deps) {
+            const index = effectIndex++;
+            const prevDeps = effects[index]?.deps;
+            
+            if (!prevDeps || !deps || deps.some((dep, i) => dep !== prevDeps[i])) {
+                if (effects[index]?.cleanup) {
+                    effects[index].cleanup();
+                }
+                const cleanup = callback();
+                effects[index] = { deps, cleanup };
+            }
+        }
+
+        function useCallback(callback, deps) {
+            return callback;
+        }
+
+        function useMemo(callback, deps) {
+            return callback();
+        }
+
+        // Persistent Storage hook (บันทึกข้อมูลถาวร)
+        function usePersistentStorage() {
+            const [storageState, setStorageState] = useState({
+                db: PersistentDB,
+                userId: 'user-' + Date.now(),
+                loading: false,
+                error: null,
+                storageInfo: PersistentDB.getStorageInfo(),
+            });
+
+            return storageState;
+        }
+
+        // Utility Components
+        const LoadingSpinner = () => `
+            <div class="flex justify-center items-center p-6">
+                <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                <span class="ml-3 text-gray-600">กำลังโหลด...</span>
+            </div>
+        `;
+
+        const Notification = ({ message, type, onClose }) => {
+            if (!message) return '';
+            const color = type === 'success' ? 'bg-green-100 border-green-400 text-green-700' : 'bg-red-100 border-red-400 text-red-700';
+            return `
+                <div class="fixed top-4 right-4 z-50 p-4 rounded-lg border shadow-lg transition-opacity duration-300 ${color}" role="alert">
+                    <div class="flex justify-between items-center">
+                        <span class="font-medium">${message}</span>
+                        <button onclick="this.parentElement.parentElement.remove()" class="ml-4 text-sm font-bold opacity-70 hover:opacity-100">×</button>
+                    </div>
+                </div>
+            `;
+        };
+
+        const Card = ({ children, className = '' }) => `
+            <div class="bg-white p-6 rounded-xl shadow-2xl ${className}">
+                ${children}
+            </div>
+        `;
+
+        const Button = ({ children, onClick, disabled = false, className = '', type = 'button' }) => `
+            <button
+                type="${type}"
+                onclick="${onClick || ''}"
+                ${disabled ? 'disabled' : ''}
+                class="px-6 py-3 rounded-xl font-semibold transition-all duration-200 focus:outline-none focus:ring-4 ${
+                    disabled
+                        ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                        : 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-500/50 focus:ring-blue-500/50'
+                } ${className}"
+            >
+                ${children}
+            </button>
+        `;
+
+        // Password Screen Component
+        class PasswordScreen {
+            constructor(container, onAccessGranted, onSwitchView) {
+                this.container = container;
+                this.onAccessGranted = onAccessGranted;
+                this.onSwitchView = onSwitchView;
+                currentComponent = this;
+                stateIndex = 0;
+                effectIndex = 0;
+            }
+
+            render() {
+                const [password, setPassword] = useState('');
+                const [error, setError] = useState('');
+                const [isSubmitting, setIsSubmitting] = useState(false);
+
+                const handleSubmit = (e) => {
+                    e.preventDefault();
+                    setIsSubmitting(true);
+                    setError('');
+                    setTimeout(() => {
+                        if (password === ACCESS_PASSWORD) {
+                            this.onAccessGranted();
+                        } else {
+                            setError('รหัสผ่านไม่ถูกต้อง กรุณาลองอีกครั้ง');
+                        }
+                        setIsSubmitting(false);
+                    }, 300);
+                };
+
+                this.container.innerHTML = `
+                    <div class="flex flex-col items-center justify-center min-h-screen bg-gray-50 p-4">
+                        ${Card({
+                            children: `
+                                <h1 class="text-3xl font-extrabold text-blue-700 mb-6 text-center">🔐 ต้องการรหัสผ่านเพื่อเข้าถึงแดชบอร์ด</h1>
+                                <p class="text-gray-600 mb-6 text-center">แดชบอร์ดสรุปผลเป็นข้อมูลความลับ กรุณาใส่รหัสผ่านเพื่อดำเนินการต่อ</p>
+                                <form id="passwordForm" class="space-y-4">
+                                    <div>
+                                        <input
+                                            type="password"
+                                            id="passwordInput"
+                                            placeholder="รหัสผ่าน"
+                                            class="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                            required
+                                        />
+                                    </div>
+                                    <div id="errorMessage" class="text-red-500 text-sm" style="display: ${error ? 'block' : 'none'}">${error}</div>
+                                    ${Button({
+                                        children: isSubmitting ? 'กำลังตรวจสอบ...' : 'เข้าสู่แดชบอร์ด',
+                                        type: 'submit',
+                                        disabled: isSubmitting,
+                                        className: 'w-full'
+                                    })}
+                                    <button type="button" onclick="app.switchView('form')" class="w-full text-center text-sm text-gray-500 hover:text-blue-600 mt-2 transition-colors">
+                                        ยกเลิกและกลับไปหน้าแบบฟอร์ม
+                                    </button>
+                                </form>
+                            `,
+                            className: 'max-w-md w-full'
+                        })}
+                    </div>
+                `;
+
+                document.getElementById('passwordForm').onsubmit = handleSubmit;
+                document.getElementById('passwordInput').oninput = (e) => {
+                    setPassword(e.target.value);
+                    setError('');
+                };
+            }
+        }
+
+        // Form Screen Component
+        class FormScreen {
+            constructor(container, db, userId, onSwitchView) {
+                this.container = container;
+                this.db = db;
+                this.userId = userId;
+                this.onSwitchView = onSwitchView;
+                currentComponent = this;
+                stateIndex = 0;
+                effectIndex = 0;
+            }
+
+            render() {
+                const initialScores = ALL_CRITERIA.reduce((acc, c) => {
+                    acc[c.id] = EMPLOYEES.reduce((empAcc, emp) => ({ ...empAcc, [emp]: null }), {});
+                    return acc;
+                }, {});
+
+                const [scores, setScores] = useState(initialScores);
+                const [isSubmitting, setIsSubmitting] = useState(false);
+                const [message, setMessage] = useState(null);
+                const [storageInfo, setStorageInfo] = useState(this.db.getStorageInfo());
+
+                const handleScoreChange = (criteriaId, employeeName, value) => {
+                    setScores(prevScores => ({
+                        ...prevScores,
+                        [criteriaId]: {
+                            ...prevScores[criteriaId],
+                            [employeeName]: value,
+                        },
+                    }));
+                };
+
+                const isFormValid = ALL_CRITERIA.every(criteria =>
+                    EMPLOYEES.every(employee => scores[criteria.id] && scores[criteria.id][employee] !== null)
+                );
+
+                const handleSubmit = async (e) => {
+                    e.preventDefault();
+                    if (!isFormValid || isSubmitting) return;
+
+                    setIsSubmitting(true);
+                    
+                    const evaluatorName = 'Cross Evaluation @ Accounting';
+                    
+                    const evaluationData = {
+                        evaluatorId: this.userId,
+                        evaluatorName: evaluatorName,
+                        scores: scores,
+                    };
+
+                    try {
+                        await this.db.save(STORAGE_KEY, evaluationData);
+                        setMessage({ text: 'การประเมินถูกบันทึกถาวรสำเร็จ! ขอบคุณค่ะ/ครับ', type: 'success' });
+                        setScores(initialScores);
+                        setStorageInfo(this.db.getStorageInfo());
+                        
+                        // Auto refresh dashboard if it exists
+                        setTimeout(() => {
+                            if (window.app && window.app.view === 'dashboard') {
+                                window.app.render();
+                            }
+                        }, 1000);
+                    } catch (error) {
+                        console.error("Error saving data: ", error);
+                        setMessage({ text: `เกิดข้อผิดพลาดในการส่งข้อมูล: ${error.message}`, type: 'error' });
+                    } finally {
+                        setIsSubmitting(false);
+                    }
+                };
+
+                this.container.innerHTML = `
+                    <div class="min-h-screen bg-gray-50 p-4 md:p-8">
+                        ${message ? Notification({ message: message.text, type: message.type, onClose: () => setMessage(null) }) : ''}
+                        <header class="flex justify-between items-center mb-6 border-b pb-4">
+                            <h1 class="text-2xl md:text-3xl font-extrabold text-blue-700">แบบประเมินกันเอง (Staff Evaluation) Cross Evaluation @ Accounting</h1>
+                            ${Button({
+                                children: 'ดูแดชบอร์ดสรุปผล',
+                                onClick: "app.switchView('dashboard')",
+                                className: 'px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 shadow-blue-500/50'
+                            })}
+                        </header>
+                        
+                        ${Card({
+                            children: `
+                                <h2 class="text-xl font-semibold text-gray-800 mb-2">คำแนะนำ</h2>
+                                <p class="text-gray-600 text-sm">กรุณาให้คะแนนพนักงานทั้ง 4 ท่าน สำหรับทุกเกณฑ์ โดยไม่มีช่องว่าง</p>
+                                <p class="text-gray-600 text-sm">การให้คะแนน: **5 / 3 / 1**</p>
+                                <div class="mt-3 p-3 ${storageInfo.available ? 'bg-green-50 border-l-4 border-green-400' : 'bg-yellow-50 border-l-4 border-yellow-400'} rounded">
+                                    <p class="text-sm font-medium ${storageInfo.available ? 'text-green-800' : 'text-yellow-800'}">
+                                        ${storageInfo.available 
+                                            ? `💾 ระบบบันทึกข้อมูลถาวร: เปิดใช้งาน (ใช้พื้นที่ ${storageInfo.usedSpaceKB} KB)`
+                                            : '⚠️ ระบบบันทึกข้อมูลถาวร: ไม่สามารถใช้งานได้ จะใช้หน่วยความจำชั่วคราว'
+                                        }
+                                    </p>
+                                </div>
+                            `,
+                            className: 'mb-8'
+                        })}
+
+                        <form id="evaluationForm" class="space-y-8">
+                            ${Card({
+                                children: `
+                                    <h2 class="text-xl font-semibold text-gray-800 mb-4">เกณฑ์การประเมิน</h2>
+                                    ${CRITERIA_GROUPS.map(group => `
+                                        <div class="mb-6">
+                                            <h3 class="text-lg font-bold text-blue-600 p-2 bg-blue-50 rounded-lg shadow-inner mb-3">${group.title}</h3>
+                                            <div class="overflow-x-auto rounded-xl border border-gray-200 shadow-lg">
+                                                <table class="min-w-full divide-y divide-gray-200">
+                                                    <thead class="bg-gray-50 sticky top-0 z-10">
+                                                        <tr>
+                                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/3">
+                                                                เกณฑ์พิจารณา
+                                                            </th>
+                                                            ${EMPLOYEES.map(emp => `
+                                                                <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-1/6">
+                                                                    ${emp}
+                                                                </th>
+                                                            `).join('')}
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody class="bg-white divide-y divide-gray-200">
+                                                        ${group.criteria.map(criteria => `
+                                                            <tr class="criteria-row" data-criteria="${criteria.id}">
+                                                                <td class="p-4 whitespace-normal text-sm font-medium text-gray-900 border-r border-gray-100">
+                                                                    <span class="font-bold mr-2 text-blue-500">${criteria.id}</span> ${criteria.text}
+                                                                </td>
+                                                                ${EMPLOYEES.map(employee => `
+                                                                    <td class="p-2 text-center border-r last:border-r-0 border-gray-100">
+                                                                        <div class="flex flex-col items-center space-y-1">
+                                                                            ${SCORES.map(score => `
+                                                                                <label class="relative p-2 w-full cursor-pointer rounded-lg transition-all duration-150 score-option bg-gray-100 hover:bg-blue-100 text-gray-700">
+                                                                                    <input
+                                                                                        type="radio"
+                                                                                        name="score-${criteria.id}-${employee}"
+                                                                                        value="${score.value}"
+                                                                                        class="hidden score-input"
+                                                                                        data-criteria="${criteria.id}"
+                                                                                        data-employee="${employee}"
+                                                                                    />
+                                                                                    <span class="text-sm font-bold">${score.label}</span>
+                                                                                </label>
+                                                                            `).join('')}
+                                                                        </div>
+                                                                    </td>
+                                                                `).join('')}
+                                                            </tr>
+                                                        `).join('')}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                `
+                            })}
+
+                            <div class="sticky bottom-0 bg-white p-4 rounded-xl shadow-2xl flex justify-center">
+                                ${Button({
+                                    children: isSubmitting ? 'กำลังบันทึกข้อมูล...' : 'ส่งแบบประเมิน',
+                                    type: 'submit',
+                                    disabled: !isFormValid || isSubmitting
+                                })}
+                            </div>
+                        </form>
+                    </div>
+                `;
+
+                // Add event listeners
+                document.getElementById('evaluationForm').onsubmit = handleSubmit;
+                
+                document.querySelectorAll('.score-input').forEach(input => {
+                    input.onchange = (e) => {
+                        const criteriaId = e.target.dataset.criteria;
+                        const employee = e.target.dataset.employee;
+                        const value = parseInt(e.target.value);
+                        
+                        handleScoreChange(criteriaId, employee, value);
+                        
+                        // Update UI
+                        const row = document.querySelector(`[data-criteria="${criteriaId}"]`);
+                        const allFilled = EMPLOYEES.every(emp => {
+                            return document.querySelector(`input[name="score-${criteriaId}-${emp}"]:checked`);
+                        });
+                        
+                        if (allFilled) {
+                            row.classList.remove('bg-red-50/50');
+                        } else {
+                            row.classList.add('bg-red-50/50');
+                        }
+                        
+                        // Update button styles
+                        e.target.parentElement.parentElement.querySelectorAll('.score-option').forEach(option => {
+                            option.classList.remove('bg-blue-600', 'text-white', 'shadow-md');
+                            option.classList.add('bg-gray-100', 'hover:bg-blue-100', 'text-gray-700');
+                        });
+                        
+                        e.target.parentElement.classList.remove('bg-gray-100', 'hover:bg-blue-100', 'text-gray-700');
+                        e.target.parentElement.classList.add('bg-blue-600', 'text-white', 'shadow-md');
+                        
+                        // Update submit button
+                        const submitButton = document.querySelector('button[type="submit"]');
+                        const allValid = ALL_CRITERIA.every(criteria =>
+                            EMPLOYEES.every(employee => 
+                                document.querySelector(`input[name="score-${criteria.id}-${employee}"]:checked`)
+                            )
+                        );
+                        
+                        if (allValid) {
+                            submitButton.disabled = false;
+                            submitButton.classList.remove('bg-gray-400', 'text-gray-200', 'cursor-not-allowed');
+                            submitButton.classList.add('bg-blue-600', 'hover:bg-blue-700', 'text-white');
+                        }
+                    };
+                });
+            }
+        }
+
+        // Dashboard Screen Component
+        class DashboardScreen {
+            constructor(container, db, onSwitchView) {
+                this.container = container;
+                this.db = db;
+                this.onSwitchView = onSwitchView;
+                currentComponent = this;
+                stateIndex = 0;
+                effectIndex = 0;
+            }
+
+            render() {
+                const [evaluations, setEvaluations] = useState([]);
+                const [loading, setLoading] = useState(true);
+                const [storageInfo, setStorageInfo] = useState(this.db.getStorageInfo());
+
+                useEffect(() => {
+                    const loadEvaluations = async () => {
+                        try {
+                            const data = await this.db.getAll(STORAGE_KEY);
+                            setEvaluations(data);
+                            setStorageInfo(this.db.getStorageInfo());
+                            setLoading(false);
+                        } catch (error) {
+                            console.error("Error loading evaluations:", error);
+                            setLoading(false);
+                        }
+                    };
+
+                    loadEvaluations();
+                }, [this.db]);
+
+                const summaryData = useMemo(() => {
+                    const results = EMPLOYEES.reduce((acc, emp) => ({
+                        ...acc,
+                        [emp]: { totalScore: 0, count: 0, criteriaScores: {} }
+                    }), {});
+
+                    if (evaluations.length === 0) return { results, totalSubmissions: 0 };
+
+                    let totalSubmissions = 0;
+                    const allCriteriaScores = {};
+
+                    evaluations.forEach(submission => {
+                        if (submission.scores) {
+                            totalSubmissions++;
+                        }
+                        const scores = submission.scores || {};
+
+                        ALL_CRITERIA.forEach(criteria => {
+                            const criteriaId = criteria.id;
+                            
+                            if (!allCriteriaScores[criteriaId]) {
+                                allCriteriaScores[criteriaId] = EMPLOYEES.reduce((acc, emp) => ({ ...acc, [emp]: [] }), {});
+                            }
+
+                            EMPLOYEES.forEach(employee => {
+                                const score = scores[criteriaId]?.[employee];
+                                if (typeof score === 'number') {
+                                    results[employee].totalScore += score;
+                                    results[employee].count++;
+                                    allCriteriaScores[criteriaId][employee].push(score);
+                                }
+                            });
+                        });
+                    });
+
+                    const finalResults = EMPLOYEES.map(emp => {
+                        const avg = results[emp].count > 0 ? (results[emp].totalScore / results[emp].count) : 0;
+                        const percentageScore = (avg / MAX_SCORE_PER_CRITERION) * 100;
+
+                        return { 
+                            name: emp, 
+                            averageScore: parseFloat(avg.toFixed(2)),
+                            percentageScore: parseFloat(percentageScore.toFixed(2)) 
+                        };
+                    });
+
+                    const criteriaAverages = ALL_CRITERIA.map(criteria => {
+                        const criteriaId = criteria.id;
+                        const avgByEmployee = {};
+                        EMPLOYEES.forEach(employee => {
+                            const scoresList = allCriteriaScores[criteriaId]?.[employee] || [];
+                            const sum = scoresList.reduce((a, b) => a + b, 0);
+                            const avg = scoresList.length > 0 ? (sum / scoresList.length).toFixed(2) : 'N/A';
+                            avgByEmployee[employee] = avg;
+                        });
+                        return { id: criteriaId, text: criteria.text, ...avgByEmployee };
+                    });
+
+                    return { finalResults, criteriaAverages, totalSubmissions };
+                }, [evaluations]);
+
+                const { finalResults, criteriaAverages, totalSubmissions } = summaryData;
+
+                const handleExportData = () => {
+                    try {
+                        const exportData = this.db.exportData(STORAGE_KEY);
+                        const blob = new Blob([exportData], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `staff-evaluation-backup-${new Date().toISOString().split('T')[0]}.json`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                    } catch (error) {
+                        alert('เกิดข้อผิดพลาดในการส่งออกข้อมูล: ' + error.message);
+                    }
+                };
+
+                const handleImportData = () => {
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.accept = '.json';
+                    input.onchange = (e) => {
+                        const file = e.target.files[0];
+                        if (file) {
+                            const reader = new FileReader();
+                            reader.onload = (e) => {
+                                try {
+                                    const result = this.db.importData(STORAGE_KEY, e.target.result);
+                                    if (result.success) {
+                                        alert(`นำเข้าข้อมูลสำเร็จ! จำนวน ${result.count} รายการ`);
+                                        // Reload data
+                                        this.render();
+                                    } else {
+                                        alert('เกิดข้อผิดพลาด: ' + result.error);
+                                    }
+                                } catch (error) {
+                                    alert('เกิดข้อผิดพลาดในการนำเข้าข้อมูล: ' + error.message);
+                                }
+                            };
+                            reader.readAsText(file);
+                        }
+                    };
+                    input.click();
+                };
+
+                const handleClearData = () => {
+                    if (confirm('คุณแน่ใจหรือไม่ที่จะลบข้อมูลทั้งหมด? การกระทำนี้ไม่สามารถยกเลิกได้!')) {
+                        this.db.clear(STORAGE_KEY);
+                        setEvaluations([]);
+                        setStorageInfo(this.db.getStorageInfo());
+                        alert('ลบข้อมูลทั้งหมดเรียบร้อยแล้ว');
+                    }
+                };
+
+                if (loading) {
+                    this.container.innerHTML = LoadingSpinner();
+                    return;
+                }
+
+                this.container.innerHTML = `
+                    <div class="min-h-screen bg-gray-50 p-4 md:p-8">
+                        <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 pb-4 border-b-4 border-blue-600">
+                            <h1 class="text-4xl font-extrabold text-blue-700 mb-2 md:mb-0">แดชบอร์ดสรุปผลการประเมิน (Real-time)</h1>
+                            <div class="flex flex-wrap gap-2">
+                                ${Button({
+                                    children: 'กลับไปหน้าแบบฟอร์ม',
+                                    onClick: "app.switchView('form')",
+                                    className: 'px-4 py-2 text-sm'
+                                })}
+                            </div>
+                        </header>
+
+                        ${Card({
+                            children: `
+                                <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-4">
+                                    <div>
+                                        <h2 class="text-2xl font-bold text-gray-800 mb-2">ภาพรวมการประเมิน</h2>
+                                        <p class="text-gray-600">จำนวนแบบฟอร์มที่ส่งแล้ว: <span class="text-3xl font-extrabold text-blue-700">${totalSubmissions}</span> รายการ</p>
+                                        <p class="text-sm ${storageInfo.available ? 'text-green-600' : 'text-yellow-600'}">
+                                            ${storageInfo.available 
+                                                ? `💾 ข้อมูลถูกบันทึกถาวร (${storageInfo.usedSpaceKB} KB)`
+                                                : '⚠️ ข้อมูลในหน่วยความจำชั่วคราว'
+                                            }
+                                        </p>
+                                    </div>
+                                    <div class="flex flex-wrap gap-2 mt-4 md:mt-0">
+                                        <button onclick="(${handleExportData})()" class="px-3 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+                                            📥 ส่งออกข้อมูล
+                                        </button>
+                                        <button onclick="(${handleImportData})()" class="px-3 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+                                            📤 นำเข้าข้อมูล
+                                        </button>
+                                        <button onclick="(${handleClearData})()" class="px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors">
+                                            🗑️ ลบข้อมูลทั้งหมด
+                                        </button>
+                                    </div>
+                                </div>
+                            `,
+                            className: 'mb-8 bg-blue-50 border-t-8 border-blue-600'
+                        })}
+
+                        ${totalSubmissions === 0 ? `
+                            <div class="text-center p-10 bg-white rounded-xl shadow-lg text-gray-500">
+                                ยังไม่มีข้อมูลการประเมิน ถูกส่งเข้ามา
+                            </div>
+                        ` : `
+                            <div class="space-y-10">
+                                ${Card({
+                                    children: `
+                                        <h2 class="text-2xl font-bold text-gray-800 mb-6">สรุปคะแนนเฉลี่ยรวมรายบุคคล (คิดเป็นเปอร์เซ็นต์)</h2>
+                                        <p class="text-gray-600 text-sm mb-4">คะแนนคิดจากคะแนนเต็มรวมทั้งหมด ${TOTAL_CRITERIA_COUNT} เกณฑ์ x 5 คะแนน = ${TOTAL_CRITERIA_COUNT * 5} คะแนน</p>
+                                        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                                            ${finalResults.sort((a, b) => b.percentageScore - a.percentageScore).map((result, index) => `
+                                                <div class="p-4 bg-blue-50 border-l-4 border-blue-600 rounded-lg shadow-md hover:shadow-xl transition-shadow duration-300">
+                                                    <p class="text-lg font-semibold text-gray-600 mb-1">อันดับที่ ${index + 1}</p>
+                                                    <p class="text-3xl font-extrabold text-blue-700">${result.name}</p>
+                                                    <p class="text-4xl font-extrabold text-gray-900 mt-2">
+                                                        ${result.percentageScore}%
+                                                        <span class="text-xl font-normal text-gray-500 ml-2">(${result.averageScore}/5)</span>
+                                                    </p>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    `
+                                })}
+
+                                ${Card({
+                                    children: `
+                                        <h2 class="text-2xl font-bold text-gray-800 mb-6">คะแนนเฉลี่ยรายเกณฑ์ (Score per Criteria: Max 5.00)</h2>
+                                        <div class="overflow-x-auto rounded-xl border border-gray-200 shadow-lg">
+                                            <table class="min-w-full divide-y divide-gray-200">
+                                                <thead class="bg-gray-50 sticky top-0 z-10">
+                                                    <tr>
+                                                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/3">
+                                                            เกณฑ์พิจารณา
+                                                        </th>
+                                                        ${EMPLOYEES.map(emp => `
+                                                            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-1/6">
+                                                                ${emp}
+                                                            </th>
+                                                        `).join('')}
+                                                    </tr>
+                                                </thead>
+                                                <tbody class="bg-white divide-y divide-gray-200">
+                                                    ${criteriaAverages.map(criteria => `
+                                                        <tr>
+                                                            <td class="p-4 whitespace-normal text-sm font-medium text-gray-900 border-r border-gray-100">
+                                                                <span class="font-bold mr-2 text-blue-500">${criteria.id}</span> ${criteria.text}
+                                                            </td>
+                                                            ${EMPLOYEES.map(employee => {
+                                                                const score = parseFloat(criteria[employee]);
+                                                                const colorClass = score >= 4.5 ? 'bg-green-100 text-green-700' :
+                                                                                 score >= 3.0 ? 'bg-yellow-100 text-yellow-700' :
+                                                                                 'bg-red-100 text-red-700';
+                                                                return `
+                                                                    <td class="p-2 text-center font-bold border-r last:border-r-0 border-gray-100 transition-colors duration-200 ${colorClass}">
+                                                                        ${criteria[employee]}
+                                                                    </td>
+                                                                `;
+                                                            }).join('')}
+                                                        </tr>
+                                                    `).join('')}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    `
+                                })}
+                            </div>
+                        `}
+                    </div>
+                `;
+            }
+        }
+
+        // Main App Class
+        class App {
+            constructor() {
+                this.container = document.getElementById('app');
+                this.isDashboardUnlocked = false;
+                this.view = 'form';
+                
+                currentComponent = this;
+                stateIndex = 0;
+                effectIndex = 0;
+                
+                this.firebaseState = this.useFirebase();
+                this.render();
+            }
+
+            useFirebase() {
+                return usePersistentStorage();
+            }
+
+            handleAccessGranted() {
+                this.isDashboardUnlocked = true;
+                this.view = 'dashboard';
+                this.render();
+            }
+
+            switchView(targetView) {
+                if (targetView === 'dashboard' && !this.isDashboardUnlocked) {
+                    this.view = 'password_for_dashboard';
+                } else {
+                    this.view = targetView;
+                }
+                this.render();
+            }
+
+            render() {
+                const { db, userId, loading, error } = this.firebaseState;
+
+                if (loading) {
+                    this.container.innerHTML = LoadingSpinner();
+                    return;
+                }
+
+                if (error) {
+                    this.container.innerHTML = `
+                        <div class="text-center p-10 text-red-600 bg-red-50 min-h-screen">
+                            <h1 class="text-2xl font-bold">Storage Error</h1>
+                            <p>${error}</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                // Main View Routing - Enhanced version
+                let CurrentScreen;
+                if (this.view === 'password_for_dashboard') {
+                    // Show password screen if trying to access dashboard without unlocking
+                    CurrentScreen = new PasswordScreen(
+                        this.container,
+                        () => this.handleAccessGranted(),
+                        (view) => this.switchView(view)
+                    );
+                } else if (this.view === 'form') {
+                    CurrentScreen = new FormScreen(
+                        this.container,
+                        db,
+                        userId,
+                        (view) => this.switchView(view)
+                    );
+                } else if (this.view === 'dashboard') {
+                    CurrentScreen = new DashboardScreen(
+                        this.container,
+                        db,
+                        (view) => this.switchView(view)
+                    );
+                } else {
+                    // Error state for invalid view
+                    this.container.innerHTML = `
+                        <div class="font-sans antialiased">
+                            <div class="p-10 text-red-500 text-center min-h-screen bg-red-50">
+                                <h1 class="text-2xl font-bold mb-4">Error: Invalid view state</h1>
+                                <p class="mb-4">Current view: ${this.view}</p>
+                                <button onclick="app.switchView('form')" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                                    กลับไปหน้าแบบฟอร์ม
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                    return;
+                }
+
+                // Render the current screen with font styling wrapper
+                this.container.innerHTML = `<div class="font-sans antialiased"></div>`;
+                const wrapper = this.container.querySelector('.font-sans');
+                CurrentScreen.container = wrapper;
+                CurrentScreen.render();
+            }
+        }
+
+        // Initialize app when DOM is loaded
+        document.addEventListener('DOMContentLoaded', () => {
+            window.app = new App();
+        });
+
+        // Export for compatibility (if needed)
+        if (typeof module !== 'undefined' && module.exports) {
+            module.exports = App;
+        }
+    </script>
+    <style>
+        body {
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+    <div id="app"></div>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'98837ddfa6fb1d37',t:'MTc1OTQwMDY4My4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>
